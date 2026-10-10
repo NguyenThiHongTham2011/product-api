@@ -1,0 +1,122 @@
+name: Product API CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    services:
+      mongodb:
+        image: mongo:8.0
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.adminCommand(\"ping\").ok ? 0 : 1)'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      PORT: 3000
+      MONGO_URI: mongodb://127.0.0.1:27017/productci_test
+
+    steps:
+      - name: Lay ma nguon
+        uses: actions/checkout@v4
+
+      - name: Cai Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Cai thu vien
+        run: npm ci
+
+      - name: Khoi dong API
+        run: |
+          node server.js > api.log 2>&1 &
+          echo $! > api.pid
+
+      - name: Cho API san sang
+        run: |
+          for i in {1..30}; do
+            if curl --fail --silent http://localhost:3000/health; then
+              exit 0
+            fi
+            sleep 2
+          done
+          cat api.log
+          exit 1
+
+      - name: Kiem tra CRUD
+        shell: bash
+        run: |
+          set -euo pipefail
+          API=http://localhost:3000/api/products
+
+          # Create: thêm sản phẩm, cần HTTP 201.
+          STATUS=$(curl -sS -o created.json -w "%{http_code}" \
+            -X POST "$API" \
+            -H "Content-Type: application/json" \
+            -d '{"pid":"CI001","pname":"Notebook","price":25000,"quantity":10}')
+          test "$STATUS" = "201"
+
+          # Read: tìm lại sản phẩm và kiểm tra dữ liệu.
+          STATUS=$(curl -sS -o read.json -w "%{http_code}" "$API/CI001")
+          test "$STATUS" = "200"
+          node -e "
+            const assert = require('node:assert/strict');
+            const p = require('./read.json');
+            assert.equal(p.pid, 'CI001');
+            assert.equal(p.price, 25000);
+            assert.equal(p.quantity, 10);
+          "
+
+          # Update: cập nhật sản phẩm, cần HTTP 200.
+          STATUS=$(curl -sS -o updated.json -w "%{http_code}" \
+            -X PUT "$API/CI001" \
+            -H "Content-Type: application/json" \
+            -d '{"pid":"CI001","pname":"Notebook","price":30000,"quantity":5}')
+          test "$STATUS" = "200"
+
+          # Đọc lại để xác nhận cập nhật đã được lưu.
+          curl --fail --silent --show-error "$API/CI001" -o read.json
+          node -e "
+            const assert = require('node:assert/strict');
+            const p = require('./read.json');
+            assert.equal(p.price, 30000);
+            assert.equal(p.quantity, 5);
+          "
+
+          # Delete: xóa sản phẩm, cần HTTP 204.
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" \
+            -X DELETE "$API/CI001")
+          test "$STATUS" = "204"
+
+          # Tìm sản phẩm đã xóa, cần HTTP 404.
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" "$API/CI001")
+          test "$STATUS" = "404"
+
+          echo "Tat ca kiem tra CRUD da thanh cong!"
+
+      - name: Hien log neu loi
+        if: failure()
+        run: cat api.log || true
+
+      - name: Dung API
+        if: always()
+        run: |
+          if [ -f api.pid ]; then
+            kill "$(cat api.pid)" || true
+          fi
