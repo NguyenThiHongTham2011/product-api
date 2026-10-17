@@ -110,6 +110,18 @@ jobs:
 
           echo "Tat ca kiem tra CRUD da thanh cong!"
 
+      - name: Reject negative price without persisting product
+        shell: bash
+        run: |
+          set -euo pipefail
+          API=http://localhost:3000/api/products
+          STATUS=$(curl -sS -o invalid.json -w "%{http_code}" -X POST "$API" \
+            -H "Content-Type: application/json" \
+            -d '{"pid":"CI_NEGATIVE","pname":"Invalid price","price":-1,"quantity":1}')
+          test "$STATUS" = "400"
+          STATUS=$(curl -sS -o /dev/null -w "%{http_code}" "$API/CI_NEGATIVE")
+          test "$STATUS" = "404"
+
       - name: Hien log neu loi
         if: failure()
         run: cat api.log || true
