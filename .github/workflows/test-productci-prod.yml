@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: product-api-production-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   test-production-image:
     runs-on: ubuntu-latest
@@ -184,6 +188,20 @@ jobs:
               print("PASS: Delete");
             '
 
+      - name: Dang nhap Docker Hub
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v4
+        with:
+          username: nguyenthihongtham2011
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push image da qua healthcheck va CRUD
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          docker tag product-api:1.0 nguyenthihongtham2011/product-api:sha-${{ github.sha }}
+          docker tag product-api:1.0 nguyenthihongtham2011/product-api:latest
+          docker push nguyenthihongtham2011/product-api:sha-${{ github.sha }}
+          docker push nguyenthihongtham2011/product-api:latest
       - name: Hien trang thai va log khi that bai
         if: failure()
         run: |
